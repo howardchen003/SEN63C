@@ -38,6 +38,10 @@
 #include <Arduino.h>
 #include <SensirionI2cSen63c.h>
 #include <Wire.h>
+#include <SPI.h>
+#include "Adafruit_GFX.h"
+#include "Adafruit_ThinkInk.h"
+#include <Fonts/FreeSerif9pt7b.h>
 
 // macro definitions
 // make sure that we use the proper definition of NO_ERROR
@@ -45,8 +49,14 @@
 #undef NO_ERROR
 #endif
 #define NO_ERROR 0
+#define EPD_DC    D0   // display data/command
+#define EPD_CS    D1   // display chip select
+#define EPD_RESET D3   // display reset (can be -1 to share MCU reset)
+#define EPD_BUSY  D7   // display busy (can be -1, code will just delay instead)
+#define SRAM_CS   D2
 
 SensirionI2cSen63c sensor;
+ThinkInk_213_Mono_GDEY0213B74 display(EPD_DC, EPD_RESET, EPD_CS, SRAM_CS, EPD_BUSY, &SPI);
 
 static char errorMessage[64];
 static int16_t error;
@@ -58,47 +68,77 @@ void setup() {
         delay(100);
     }
     Wire.begin();
-    sensor.begin(Wire, SEN63C_I2C_ADDR_6B);
+    
+    //initialize EPD
+    display.begin(THINKINK_MONO); 
+    display.clearDisplay();
+    display.setTextSize(2);
+    display.setCursor((display.width() - 180) / 2, (display.height() - 24) / 2);
+    display.setTextColor(EPD_BLACK);
 
+    //initialize sensor
+    sensor.begin(Wire, SEN63C_I2C_ADDR_6B);
     error = sensor.deviceReset();
     if (error != NO_ERROR) {
         Serial.print("Error trying to execute deviceReset(): ");
         errorToString(error, errorMessage, sizeof errorMessage);
         Serial.println(errorMessage);
+        display.clearBuffer();
+        display.print(errorMessage);
+        display.display();
         return;
     }
     delay(1200);
     int8_t serialNumber[32] = {0};
 
+    //get Serial Number
     error = sensor.getSerialNumber(serialNumber, 32);
     if (error != NO_ERROR) {
         Serial.print("Error trying to execute getSerialNumber(): ");
         errorToString(error, errorMessage, sizeof errorMessage);
         Serial.println(errorMessage);
+        display.clearBuffer();
+        display.print(errorMessage);
+        display.display();
         return;
     }
     Serial.print("serialNumber: ");
     Serial.print((const char*)serialNumber);
     Serial.println();
 
+    //Fan Cleaning Sequence
     Serial.print("Fan Cleaning Start");
     Serial.println();
+    display.clearBuffer();
+    display.print("Fan Cleaning Start");
+    display.display();
     error = sensor.startFanCleaning();
     if (error != NO_ERROR) {
         Serial.print("Error trying to execute startFanCleaning(): ");
         errorToString(error, errorMessage, sizeof errorMessage);
         Serial.println(errorMessage);
+        display.clearBuffer();
+        display.print(errorMessage);
+        display.display();
         return;
     }
     delay(10000);
     Serial.print("Fan Cleaning Finished");
     Serial.println();
+    display.clearBuffer();
+    display.print("Clean Complete\n"
+    "Initializing CO2 Sensor");
+    display.display();
 
+    //Start Sensor
     error = sensor.startContinuousMeasurement();
     if (error != NO_ERROR) {
         Serial.print("Error trying to execute startContinuousMeasurement(): ");
         errorToString(error, errorMessage, sizeof errorMessage);
         Serial.println(errorMessage);
+        display.clearBuffer();
+        display.print(errorMessage);
+        display.display();
         return;
     }
     Serial.print("Initializing CO2 Sensor");
@@ -132,39 +172,11 @@ void loop() {
             Serial.print("Error trying to execute readMeasuredValues(): ");
             errorToString(error, errorMessage, sizeof errorMessage);
             Serial.println(errorMessage);
+            display.clearBuffer();
+            display.print(errorMessage);
+            display.display();
             return;
         }
-
-        // switch (PM1)
-        // {
-        // case 0:
-        //     Serial.print("PM1 Good");
-        //     Serial.print("\t");
-        //     break;
-        // case 1:
-        //     Serial.print("PM1 Moderate");
-        //     Serial.print("\t");
-        // case 2:
-        //     Serial.print("PM1 Unhealthy for Sensitive Groups");
-        //     Serial.print("\t");
-        //     break;
-        // case 3:
-        //     Serial.print("PM1 Unhealthy");
-        //     Serial.print("\t");
-        //     break;
-        // case 4:
-        //     Serial.print("PM1 Very Unhealthy");
-        //     Serial.print("\t");
-        //     break;
-        // case 5:
-        //     Serial.print("PM1 Hazardous");
-        //     Serial.print("\t");
-        //     break;
-        // default:
-        //     Serial.print("error i guess");
-        //     Serial.print("\t");
-        //     break;
-        // }
 
             Serial.print("PM1: ");
             Serial.print(particulateSizeLessThan1um);
@@ -193,9 +205,28 @@ void loop() {
             Serial.print("co2: ");
             Serial.print(co2);
             Serial.println();
+
+            //send to display
+            display.clearBuffer();
+            display.setTextSize(1);
+            display.setTextColor(EPD_BLACK);
+            display.setTextWrap(false);
+            display.setFont(&FreeSerif9pt7b);
+            display.setCursor(0, 14);
+
+            display.printf(
+                "PM1: %5.2f           %5.2f :PM2.5\n"    // yes this is a terrible implementation. no i am no changing it for now
+                "PM4: %5.2f            %5.2f :PM10\n"
+                "Humid: %5.2f%%   %5.2f C :Temp\n"
+                "CO2: %d ppm",
+                particulateSizeLessThan1um, particulateSizeLessThan2P5um, particulateSizeLessThan4um, particulateSizeLessThan10um, humidity, temperature, co2);
+
+            display.display();
+
     }
     else{
         return;
     }
     
+    delay(10000);   //refresh every 10s
 }
